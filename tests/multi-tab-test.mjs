@@ -1,11 +1,11 @@
-// Multi-tab client isolation — regression test for issue #10.
+// Multi-tab live mirroring — custom fork behavior.
 //
-// 两个标签页（同一 origin）曾共享 localStorage 里的 clientId，命中后端同一个
-// ClientSession：B 页切换对话会同步切走 A 页并中断正在运行的 agent。
-// 修复后 clientId 存 sessionStorage（每标签页独立），两页应是两个独立客户端：
-//   1. 两页的 clientId 不同；
-//   2. A 页切换对话不会改变 B 页的 activeId / 消息列表；
-//   3. B 页发 prompt 不影响 A 页正在流式输出的内容（A 的 snapshot 不被 B 打断）。
+// All browser tabs/devices deliberately share one fixed clientId and therefore
+// attach as multiple sinks to the SAME ClientSession. This is remote-control
+// semantics: one runtime, one active conversation, live state mirrored everywhere.
+//   1. two tabs expose the same shared clientId;
+//   2. reloading one tab does not disturb the shared runtime;
+//   3. both tabs remain attached to the same server-side ClientSession.
 //
 // Usage: node tests/multi-tab-test.mjs   （需要本机 Chrome，见 lib/chrome.mjs）
 import { chromium } from "playwright-core";
@@ -96,13 +96,12 @@ try {
 	const idA = await readClientId(a);
 	const idB = await readClientId(b);
 	check(
-		"two tabs have DIFFERENT clientIds",
-		!!idA && !!idB && idA !== idB,
-		`${idA?.slice(0, 8)} vs ${idB?.slice(0, 8)}`,
+		"two tabs have the SAME shared clientId",
+		!!idA && !!idB && idA === idB && idA === "pi-web-shared-client",
+		`${idA} vs ${idB}`,
 	);
 
-	// 标签页 B 切换到「历史对话」区域/新建对话，不应影响 A 的输入框可用性
-	// 与消息列表（无共享状态的最直接表现：A 的 DOM 不随 B 操作变化）。
+	// Reloading B must not tear down the shared ClientSession/runtime while A stays connected.
 	const markerA = await a.evaluate(() => document.body.innerHTML.length);
 	await b.reload();
 	await b.waitForLoadState("domcontentloaded");
@@ -110,7 +109,7 @@ try {
 	const markerA2 = await a.evaluate(() => document.body.innerHTML.length);
 	check("tab B reload does not disturb tab A", markerA > 0 && markerA === markerA2);
 
-	// clientId 在刷新后保持稳定（sessionStorage 生命周期）
+	// Shared clientId stays stable across reload.
 	const idA2 = await readClientId(a);
 	check("tab A keeps its clientId across reload", idA2 === idA);
 
