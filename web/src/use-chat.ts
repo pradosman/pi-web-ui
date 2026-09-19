@@ -1089,9 +1089,7 @@ export function useChat() {
 	const lastDeltaSeqRef = useRef<Map<string, number>>(new Map());
 	const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	/** 跨重启工作目录记忆：restoreRef 只允许首帧快照发起一次恢复；lastCwdRef
-	 *  避免对同一目录重复写 localStorage。 */
-	const restoreRef = useRef(false);
+	/** Passive local cwd cache only; the shared ClientSession owns navigation. */
 	const lastCwdRef = useRef<string | null>(null);
 
 	/** 已作答/取消的问卷 id —— 在途旧快照不得把已答过的问卷重新弹出来。
