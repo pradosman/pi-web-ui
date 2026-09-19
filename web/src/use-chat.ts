@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { randomUuid } from "./uuid";
 import { withToken } from "./auth-token";
 import { appUrl } from "./base-url";
 import type {
@@ -945,31 +944,29 @@ function reducer(state: ChatState, action: Action): ChatState {
 }
 
 const CLIENT_ID_KEY = "pi-web-client-id";
+const SHARED_CLIENT_ID = "pi-web-shared-client";
 let cachedClientId: string | null = null;
 
 /**
- * 客户端标识 —— **每标签页独立**（sessionStorage 而非 localStorage）。
+ * Shared browser identity for remote-control mode.
  *
- * 曾用 localStorage：同源所有标签页共享同一 clientId，后端把它们挂到同一个
- * ClientSession 上互为镜像——B 标签页切换对话会同步切走 A 页、甚至把 A 页
- * 正在输出的 agent 强制中断且状态持久化（issue #10）。改为 sessionStorage 后
- * 新开标签页即新客户端；刷新本页仍保留同一 id，client-state（最近项目等）不丢。
+ * All browsers connected to this pi-web-ui instance deliberately present the
+ * same clientId. AgentService already treats sockets with the same clientId as
+ * multiple sinks of ONE ClientSession, so Mac/iPhone/tabs become live mirrors:
+ * one AgentSessionRuntime, one active conversation, one question/tool stream.
+ *
+ * Keep the value in sessionStorage for compatibility with code that inspects
+ * the existing key, but never generate a per-tab id in this fork.
  */
 export function getClientId(): string {
 	if (cachedClientId) return cachedClientId;
-	let id: string | null = null;
 	try {
-		id = sessionStorage.getItem(CLIENT_ID_KEY);
-		if (!id) {
-			id = randomUuid();
-			sessionStorage.setItem(CLIENT_ID_KEY, id);
-		}
+		sessionStorage.setItem(CLIENT_ID_KEY, SHARED_CLIENT_ID);
 	} catch {
-		// storage 不可用（隐私模式等）：退化为页面生命周期内的一次性 id
-		id = id ?? randomUuid();
+		/* storage unavailable: the in-memory constant is enough */
 	}
-	cachedClientId = id;
-	return id;
+	cachedClientId = SHARED_CLIENT_ID;
+	return SHARED_CLIENT_ID;
 }
 
 /**
@@ -1092,9 +1089,7 @@ export function useChat() {
 	const lastDeltaSeqRef = useRef<Map<string, number>>(new Map());
 	const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-	/** 跨重启工作目录记忆：restoreRef 只允许首帧快照发起一次恢复；lastCwdRef
-	 *  避免对同一目录重复写 localStorage。 */
-	const restoreRef = useRef(false);
+	/** Passive local cwd cache only; the shared ClientSession owns navigation. */
 	const lastCwdRef = useRef<string | null>(null);
 
 	/** 已作答/取消的问卷 id —— 在途旧快照不得把已答过的问卷重新弹出来。
@@ -1772,28 +1767,19 @@ export function useChat() {
 		};
 	}, [connect]);
 
-	// -- 跨浏览器重启：恢复上次工作目录（localStorage 记忆） ---------------------
-	// 服务端按 clientId 记 lastCwd，而 clientId 在 sessionStorage（关浏览器即失），
-	// 重启后新 clientId 查不到记录 → 落回默认目录。这里在首帧快照上：若服务端
-	// 当前目录 ≠ 记忆目录，补发 set_cwd 切回；此后每次 cwd 变化都写回记忆。
+	// -- 共享客户端：服务端 cwd 是唯一真相 ---------------------------------------
+// Mac/iPhone/tabs share one ClientSession, so a device-local localStorage cwd
+// must NEVER force set_cwd on connect (that would make devices fight over the
+// active project). The shared ClientSession persists lastCwd server-side.
+// Keep a local copy only as a passive convenience for legacy consumers.
 	useEffect(() => {
 		const cwd = chat.state?.cwd;
 		if (!cwd) return;
-		if (!restoreRef.current) {
-			restoreRef.current = true;
-			const remembered = readLastCwd();
-			if (remembered && remembered !== cwd) {
-				// 记忆目录存在则服务端切换后会推新快照；不存在则服务端报错通知，
-				// 保持默认目录——两种结果都不回写记忆，等用户下次操作再更新。
-				send({ type: "set_cwd", path: remembered });
-				return;
-			}
-		}
 		if (lastCwdRef.current !== cwd) {
 			lastCwdRef.current = cwd;
 			writeLastCwd(cwd);
 		}
-	}, [chat.state?.cwd, send]);
+	}, [chat.state?.cwd]);
 
 	// -- 全局镜像：连接态 + 当前工作目录 -----------------------------------------
 	// 这三个值整棵树都要（左栏/输入框/右栏/全局搜索/底栏…）且变化频率低，放全局 store
